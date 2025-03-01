@@ -50,6 +50,8 @@ function App() {
   const typingTimeoutRef = useRef(null)
   const reconnectTimeoutRef = useRef(null)
   const fileInputRef = useRef(null)
+  // Flag to prevent auto reconnect when manually disconnecting
+  const manualDisconnectRef = useRef(false)
 
   useEffect(() => {
     localStorage.setItem("lantern-messages", JSON.stringify(messages))
@@ -87,7 +89,7 @@ function App() {
   useEffect(() => {
     if (!isOnline && connectionStatus === "connected") {
       setConnectionStatus("disconnected")
-    } else if (isOnline && connectionStatus === "disconnected" && remoteId && reconnectAttempts < 5) {
+    } else if (isOnline && connectionStatus === "disconnected" && remoteId && reconnectAttempts < 5 && !manualDisconnectRef.current) {
       reconnectToPeer()
     }
   }, [isOnline, connectionStatus, remoteId, reconnectAttempts])
@@ -98,11 +100,14 @@ function App() {
       setPeerId(id)
       console.log("My Peer ID is:", id)
       setReconnectAttempts(0)
+      // Reset manual disconnect flag when a new peer is created
+      manualDisconnectRef.current = false
     })
     peer.on("connection", handleIncomingConnection)
     peer.on("error", (err) => {
       console.error("Peer error:", err)
       setConnectionStatus("disconnected")
+      if (manualDisconnectRef.current) return
       if (reconnectAttempts < 5) {
         reconnectTimeoutRef.current = setTimeout(() => {
           initializePeer()
@@ -113,6 +118,7 @@ function App() {
     peer.on("disconnected", () => {
       console.log("Peer disconnected")
       setConnectionStatus("disconnected")
+      if (manualDisconnectRef.current) return
       if (reconnectAttempts < 5) {
         reconnectTimeoutRef.current = setTimeout(() => {
           peer.reconnect()
@@ -130,6 +136,7 @@ function App() {
     conn.on("close", () => {
       setConnectionStatus("disconnected")
       setPeerIsTyping(false)
+      if (manualDisconnectRef.current) return
       if (reconnectAttempts < 5) {
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectToPeer()
@@ -185,6 +192,7 @@ function App() {
 
   const reconnectToPeer = () => {
     if (!remoteId || !peerInstance.current) return
+    if (manualDisconnectRef.current) return
     setConnectionStatus("connecting")
     const conn = peerInstance.current.connect(remoteId)
     conn.on("open", () => {
@@ -195,6 +203,7 @@ function App() {
       conn.on("close", () => {
         setConnectionStatus("disconnected")
         setPeerIsTyping(false)
+        if (manualDisconnectRef.current) return
         if (reconnectAttempts < 5) {
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectToPeer()
@@ -207,6 +216,7 @@ function App() {
     conn.on("error", (err) => {
       console.error("Connection error:", err)
       setConnectionStatus("disconnected")
+      if (manualDisconnectRef.current) return
       if (reconnectAttempts < 5) {
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectToPeer()
@@ -218,6 +228,8 @@ function App() {
 
   const connectToPeer = () => {
     if (!remoteId || remoteId === peerId) return
+    // Reset manual disconnect flag when intentionally connecting
+    manualDisconnectRef.current = false
     setConnectionStatus("connecting")
     const conn = peerInstance.current.connect(remoteId)
     conn.on("open", () => {
@@ -228,6 +240,7 @@ function App() {
       conn.on("close", () => {
         setConnectionStatus("disconnected")
         setPeerIsTyping(false)
+        if (manualDisconnectRef.current) return
         if (reconnectAttempts < 5) {
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectToPeer()
@@ -249,6 +262,8 @@ function App() {
       connRef.current = null
       setConnectionStatus("disconnected")
       setRemoteId("")
+      manualDisconnectRef.current = true
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current)
     }
   }
 
