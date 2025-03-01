@@ -3,7 +3,20 @@
 import { useState, useEffect, useRef } from "react"
 import Peer from "peerjs"
 import { motion, AnimatePresence } from "framer-motion"
-import { Copy, Send, Wifi, WifiOff, Loader2, Upload, ImageIcon, FileText, FileIcon, Sun, Moon } from "lucide-react"
+import { 
+  Copy, 
+  Send, 
+  Wifi, 
+  WifiOff, 
+  Loader2, 
+  Upload, 
+  ImageIcon, 
+  FileText, 
+  FileIcon, 
+  Sun, 
+  Moon, 
+  ArrowDown 
+} from "lucide-react"
 import "./index.css"
 import { useOnlineStatus } from "./hooks/use-online-status"
 
@@ -43,10 +56,13 @@ function App() {
     return stored ? JSON.parse(stored) : false
   })
 
+  // --- NEW: For auto-scroll logic
+  const [autoScroll, setAutoScroll] = useState(true)
+  const chatContainerRef = useRef(null)
+
   const isOnline = useOnlineStatus()
   const peerInstance = useRef(null)
   const connRef = useRef(null)
-  const messagesEndRef = useRef(null)
   const typingTimeoutRef = useRef(null)
   const reconnectTimeoutRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -86,21 +102,40 @@ function App() {
     }
   }, [])
 
+  // Auto-scroll if we're at the bottom when a new message arrives
+  useEffect(() => {
+    if (autoScroll && chatContainerRef.current) {
+      // Scroll to bottom smoothly
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      })
+    }
+  }, [messages, autoScroll])
+
+  // Watch network + connection status for reconnections
   useEffect(() => {
     if (!isOnline && connectionStatus === "connected") {
       setConnectionStatus("disconnected")
-    } else if (isOnline && connectionStatus === "disconnected" && remoteId && reconnectAttempts < 5 && !manualDisconnectRef.current) {
+    } else if (
+      isOnline &&
+      connectionStatus === "disconnected" &&
+      remoteId &&
+      reconnectAttempts < 5 &&
+      !manualDisconnectRef.current
+    ) {
       reconnectToPeer()
     }
   }, [isOnline, connectionStatus, remoteId, reconnectAttempts])
 
+  // Called once on load
   const initializePeer = () => {
     const peer = new Peer()
     peer.on("open", (id) => {
       setPeerId(id)
       console.log("My Peer ID is:", id)
       setReconnectAttempts(0)
-      // Reset manual disconnect flag when a new peer is created
+      // Reset manual disconnect flag
       manualDisconnectRef.current = false
     })
     peer.on("connection", handleIncomingConnection)
@@ -132,19 +167,16 @@ function App() {
   const handleIncomingConnection = (conn) => {
     setConnectionStatus("connected")
     setRemoteId(conn.peer)
+    connRef.current = conn
+
     conn.on("data", handleIncomingData)
     conn.on("close", () => {
+      console.log("Connection closed by remote peer")
       setConnectionStatus("disconnected")
       setPeerIsTyping(false)
-      if (manualDisconnectRef.current) return
-      if (reconnectAttempts < 5) {
-        reconnectTimeoutRef.current = setTimeout(() => {
-          reconnectToPeer()
-          setReconnectAttempts((prev) => prev + 1)
-        }, 5000)
-      }
+      // Mark as manual to prevent auto reconnect
+      manualDisconnectRef.current = true
     })
-    connRef.current = conn
   }
 
   const handleIncomingData = (data) => {
@@ -179,7 +211,12 @@ function App() {
     const url = URL.createObjectURL(blob)
     setMessages((prev) => [
       ...prev,
-      { sender: "peer", text: `Sent a file: ${fileName}`, timestamp: new Date(), file: { name: fileName, type: fileType, url } },
+      {
+        sender: "peer",
+        text: `Sent a file: ${fileName}`,
+        timestamp: new Date(),
+        file: { name: fileName, type: fileType, url },
+      },
     ])
     NEW_MESSAGE_SOUND.play().catch((err) => console.error("Error playing sound:", err))
     if (notificationsEnabled && document.visibilityState !== "visible") {
@@ -193,25 +230,24 @@ function App() {
   const reconnectToPeer = () => {
     if (!remoteId || !peerInstance.current) return
     if (manualDisconnectRef.current) return
+
     setConnectionStatus("connecting")
     const conn = peerInstance.current.connect(remoteId)
+
     conn.on("open", () => {
       console.log("Reconnected to", remoteId)
       setConnectionStatus("connected")
       setReconnectAttempts(0)
+      connRef.current = conn
+
       conn.on("data", handleIncomingData)
       conn.on("close", () => {
+        console.log("Connection closed again")
         setConnectionStatus("disconnected")
         setPeerIsTyping(false)
-        if (manualDisconnectRef.current) return
-        if (reconnectAttempts < 5) {
-          reconnectTimeoutRef.current = setTimeout(() => {
-            reconnectToPeer()
-            setReconnectAttempts((prev) => prev + 1)
-          }, 5000)
-        }
+        // Mark as manual if closed from remote side
+        manualDisconnectRef.current = true
       })
-      connRef.current = conn
     })
     conn.on("error", (err) => {
       console.error("Connection error:", err)
@@ -228,27 +264,26 @@ function App() {
 
   const connectToPeer = () => {
     if (!remoteId || remoteId === peerId) return
-    // Reset manual disconnect flag when intentionally connecting
+    // Reset manual disconnect flag
     manualDisconnectRef.current = false
+
     setConnectionStatus("connecting")
     const conn = peerInstance.current.connect(remoteId)
+
     conn.on("open", () => {
       console.log("Connected to", remoteId)
       setConnectionStatus("connected")
       setReconnectAttempts(0)
+      connRef.current = conn
+
       conn.on("data", handleIncomingData)
       conn.on("close", () => {
+        console.log("Connection closed from remote")
         setConnectionStatus("disconnected")
         setPeerIsTyping(false)
-        if (manualDisconnectRef.current) return
-        if (reconnectAttempts < 5) {
-          reconnectTimeoutRef.current = setTimeout(() => {
-            reconnectToPeer()
-            setReconnectAttempts((prev) => prev + 1)
-          }, 5000)
-        }
+        // Mark as manual so we don’t auto-reconnect
+        manualDisconnectRef.current = true
       })
-      connRef.current = conn
     })
     conn.on("error", (err) => {
       console.error("Connection error:", err)
@@ -258,11 +293,12 @@ function App() {
 
   const disconnectFromPeer = () => {
     if (connRef.current) {
+      // Mark local side as manually disconnecting
+      manualDisconnectRef.current = true
       connRef.current.close()
       connRef.current = null
       setConnectionStatus("disconnected")
       setRemoteId("")
-      manualDisconnectRef.current = true
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current)
     }
   }
@@ -340,7 +376,11 @@ function App() {
           sender: "you",
           text: `Sent a file: ${fileToSend.name}`,
           timestamp: new Date(),
-          file: { name: fileToSend.name, type: fileToSend.type, url: URL.createObjectURL(fileToSend) },
+          file: { 
+            name: fileToSend.name, 
+            type: fileToSend.type, 
+            url: URL.createObjectURL(fileToSend) 
+          },
         },
       ])
       cancelFileSelection()
@@ -384,8 +424,14 @@ function App() {
     if (file.type.startsWith("image/")) {
       return (
         <div className="relative">
-          <img src={file.url || "/placeholder.svg"} alt={file.name} className="max-w-full max-h-48 rounded-lg object-contain" />
-          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{file.name}</div>
+          <img 
+            src={file.url || "/placeholder.svg"} 
+            alt={file.name} 
+            className="max-w-full max-h-48 rounded-lg object-contain" 
+          />
+          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {file.name}
+          </div>
         </div>
       )
     } else if (file.type === "application/pdf") {
@@ -394,7 +440,12 @@ function App() {
           <FileText className="h-8 w-8 text-red-500" />
           <div className="overflow-hidden">
             <div className="truncate">{file.name}</div>
-            <a href={file.url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline">
+            <a 
+              href={file.url} 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="text-xs text-blue-500 hover:underline"
+            >
               Open PDF
             </a>
           </div>
@@ -406,7 +457,11 @@ function App() {
           <FileIcon className="h-8 w-8 text-gray-500" />
           <div className="overflow-hidden">
             <div className="truncate">{file.name}</div>
-            <a href={file.url} download={file.name} className="text-xs text-blue-500 hover:underline">
+            <a 
+              href={file.url} 
+              download={file.name} 
+              className="text-xs text-blue-500 hover:underline"
+            >
               Download
             </a>
           </div>
@@ -421,151 +476,346 @@ function App() {
     return <FileIcon className="h-4 w-4" />
   }
 
+  // --- NEW: Handle user scrolling in the chat container
+  const handleChatScroll = (e) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.target
+    // Are we close to the bottom?
+    const nearBottom = Math.abs(scrollHeight - clientHeight - scrollTop) < 10
+    setAutoScroll(nearBottom)
+  }
+
   const addEmoji = (emoji) => {
     setMessageInput((prev) => prev + emoji)
     setShowEmojiPicker(false)
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4 md:p-8 transition-colors duration-300 bg-gray-100 dark:bg-gray-900">
-      <div className="w-full max-w-4xl">
-        <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden flex flex-col relative z-10">
-          <header className="p-4 md:p-6 bg-gradient-to-r from-violet-500 to-purple-500 text-white">
-            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-              <div className="flex items-center gap-4">
-                <img src="/Lantern.png" alt="LANtern Logo" className="h-8 md:h-10 w-auto" />
-                <motion.h1 initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2, duration: 0.5 }} className="text-2xl md:text-3xl font-bold">
-                  LANtern Messenger
-                </motion.h1>
-              </div>
-              <div className="flex items-center gap-3">
-                <button type="button" onClick={() => setDarkMode(!darkMode)} className="p-2 rounded-full bg-white/20 hover:bg-white/30 transition-colors" aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}>
-                  {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-                </button>
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4, duration: 0.5 }} className={`flex items-center ${connectionStatus === "connected" ? "text-green-300" : "text-yellow-300"}`}>
-                  {connectionStatus === "connected" ? <Wifi className="mr-2" /> : <WifiOff className="mr-2" />}
-                  <span className="capitalize">{connectionStatus}</span>
-                </motion.div>
-                {connectionStatus === "connected" && (
-                  <button type="button" onClick={disconnectFromPeer} className="bg-red-500 hover:bg-red-600 text-white p-2 rounded-full transition-colors" aria-label="Disconnect">
-                    Disconnect
-                  </button>
-                )}
-              </div>
-            </div>
-            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3, duration: 0.5 }} className="mt-4 flex items-center flex-wrap gap-2">
-              <div className="text-sm">Your Peer ID:</div>
-              <div onClick={copyPeerId} className="font-mono bg-white/20 px-3 py-1 rounded-full text-sm cursor-pointer hover:bg-white/30 transition-colors flex items-center">
-                <span className="truncate max-w-[200px]">{peerId || "Connecting..."}</span>
-                <Copy className="ml-2 h-4 w-4" />
-              </div>
-              <AnimatePresence>
-                {copied && (
-                  <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }} className="text-xs bg-green-400 text-green-900 px-2 py-1 rounded-full">
-                    Copied!
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              {messages.length > 0 && (
-                <button onClick={clearChatHistory} className="ml-auto text-xs bg-white/20 hover:bg-white/30 px-2 py-1 rounded-full transition-colors">
-                  Clear History
-                </button>
+    <div className="h-screen flex flex-col bg-gray-100 dark:bg-gray-900 transition-colors duration-300">
+      {/* HEADER */}
+      <header className="p-4 md:p-6 bg-gradient-to-r from-violet-500 to-purple-500 text-white">
+        <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+          {/* Logo & Title */}
+          <div className="flex items-center gap-4">
+            <img 
+              src="/Lantern.png" 
+              alt="LANtern Logo" 
+              className="h-8 md:h-10 w-auto" 
+            />
+            <motion.h1
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.2, duration: 0.5 }}
+              className="text-2xl md:text-3xl font-bold"
+            >
+              LANtern Messenger
+            </motion.h1>
+          </div>
+          {/* Right side controls */}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setDarkMode(!darkMode)}
+              className="p-2 rounded-full bg-white/20 hover:bg-white/30 transition-colors"
+              aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            </button>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.4, duration: 0.5 }}
+              className={`flex items-center ${connectionStatus === "connected" ? "text-green-300" : "text-yellow-300"}`}
+            >
+              {connectionStatus === "connected" ? (
+                <Wifi className="mr-2" />
+              ) : (
+                <WifiOff className="mr-2" />
               )}
+              <span className="capitalize">{connectionStatus}</span>
             </motion.div>
-          </header>
-          <div className="p-6 border-b dark:border-gray-700">
-            <div className="flex gap-2">
-              <input type="text" placeholder="Enter remote Peer ID" value={remoteId} onChange={(e) => setRemoteId(e.target.value)} className="flex-1 p-3 border dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-400 transition-all" />
-              <button onClick={connectToPeer} disabled={connectionStatus === "connecting" || !remoteId} className="bg-violet-500 hover:bg-violet-600 text-white px-6 py-3 rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center min-w-[120px]">
-                {connectionStatus === "connecting" ? <Loader2 className="animate-spin h-5 w-5" /> : connectionStatus === "connected" ? "Connected" : "Connect"}
+            {connectionStatus === "connected" && (
+              <button
+                type="button"
+                onClick={disconnectFromPeer}
+                className="bg-red-500 hover:bg-red-600 text-white p-2 rounded-full transition-colors"
+                aria-label="Disconnect"
+              >
+                Disconnect
               </button>
-            </div>
-            {!isOnline && (
-              <div className="mt-2 text-sm text-red-500 flex items-center">
-                <WifiOff className="h-4 w-4 mr-1" /> You are currently offline. Reconnection will be attempted when you're back online.
-              </div>
-            )}
-            {reconnectAttempts > 0 && connectionStatus !== "connected" && (
-              <div className="mt-2 text-sm text-yellow-500">
-                Connection lost. Reconnection attempt {reconnectAttempts}/5...
-              </div>
             )}
           </div>
-          <div className="flex-1 p-6 overflow-y-auto bg-white dark:bg-gray-900 min-h-[400px] max-h-[60vh]">
-            <AnimatePresence>
-              {messages.length === 0 ? (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full flex items-center justify-center text-gray-500 dark:text-gray-400">
-                  <p className="text-center">No messages yet. Connect to a peer and start chatting!</p>
-                </motion.div>
-              ) : (
-                messages.map((msg, idx) => (
-                  <motion.div key={idx} initial={{ opacity: 0, y: 20, scale: 0.8 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.3 }} className={`mb-4 flex ${msg.sender === "you" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[80%] px-4 py-3 rounded-2xl ${msg.sender === "you" ? "bg-violet-500 text-white rounded-tr-none" : "bg-white dark:bg-gray-800 shadow-md rounded-tl-none"}`}>
-                      <div className="text-sm">{msg.text}</div>
-                      {msg.file && <div className="mt-2">{renderFilePreview(msg.file)}</div>}
-                      <div className={`text-xs mt-1 text-right ${msg.sender === "you" ? "text-violet-200" : "text-gray-500"}`}>
-                        {msg.timestamp ? formatTime(msg.timestamp) : ""}
-                      </div>
-                    </div>
-                  </motion.div>
-                ))
-              )}
-            </AnimatePresence>
-            <div ref={messagesEndRef} />
+        </div>
+
+        {/* Peer Info Row */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3, duration: 0.5 }}
+          className="mt-4 flex items-center flex-wrap gap-2"
+        >
+          <div className="text-sm">Your Peer ID:</div>
+          <div
+            onClick={copyPeerId}
+            className="font-mono bg-white/20 px-3 py-1 rounded-full text-sm cursor-pointer hover:bg-white/30 transition-colors flex items-center"
+          >
+            <span className="truncate max-w-[200px]">
+              {peerId || "Connecting..."}
+            </span>
+            <Copy className="ml-2 h-4 w-4" />
           </div>
           <AnimatePresence>
-            {filePreview && (
-              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="p-4 border-t dark:border-gray-700 bg-white dark:bg-gray-800">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    {getFileIcon(filePreview.type)}
-                    <span className="text-sm truncate max-w-[200px]">{filePreview.name}</span>
-                  </div>
-                  <button onClick={cancelFileSelection} className="text-red-500 hover:text-red-600 text-sm">
-                    Cancel
-                  </button>
-                </div>
-                {filePreview.url && filePreview.type.startsWith("image/") && (
-                  <div className="mt-2">
-                    <img src={filePreview.url || "/placeholder.svg"} alt={filePreview.name} className="max-h-32 max-w-full object-contain rounded" />
-                  </div>
-                )}
+            {copied && (
+              <motion.div
+                initial={{ opacity: 0, x: 10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0 }}
+                className="text-xs bg-green-400 text-green-900 px-2 py-1 rounded-full"
+              >
+                Copied!
               </motion.div>
             )}
           </AnimatePresence>
-          <form onSubmit={sendMessage} className="p-4 border-t dark:border-gray-700 bg-white dark:bg-gray-800 relative">
-            <div className="flex gap-2">
-              <button type="button" onClick={() => fileInputRef.current?.click()} disabled={connectionStatus !== "connected"} className="p-3 rounded-xl bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                <Upload className="h-5 w-5 text-gray-700 dark:text-gray-300" />
-                <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
-              </button>
-              <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} disabled={connectionStatus !== "connected"} className="p-3 rounded-xl bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                😀
-              </button>
-              <input type="text" placeholder="Type your message..." value={messageInput} onChange={handleTyping} disabled={connectionStatus !== "connected"} className="flex-1 p-3 border dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-400 transition-all disabled:opacity-50" />
-              <button type="submit" disabled={connectionStatus !== "connected" || (!messageInput.trim() && !fileToSend)} className="bg-violet-500 hover:bg-violet-600 text-white p-3 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center">
-                <Send className="h-5 w-5" />
+          {messages.length > 0 && (
+            <button
+              onClick={clearChatHistory}
+              className="ml-auto text-xs bg-white/20 hover:bg-white/30 px-2 py-1 rounded-full transition-colors"
+            >
+              Clear History
+            </button>
+          )}
+        </motion.div>
+      </header>
+
+      {/* CONNECT SECTION */}
+      <div className="p-4 md:p-6 border-b dark:border-gray-700 bg-white dark:bg-gray-800">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Enter remote Peer ID"
+            value={remoteId}
+            onChange={(e) => setRemoteId(e.target.value)}
+            className="flex-1 p-3 border dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-400 transition-all"
+          />
+          <button
+            onClick={connectToPeer}
+            disabled={connectionStatus === "connecting" || !remoteId}
+            className="bg-violet-500 hover:bg-violet-600 text-white px-6 py-3 rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center min-w-[120px]"
+          >
+            {connectionStatus === "connecting" ? (
+              <Loader2 className="animate-spin h-5 w-5" />
+            ) : connectionStatus === "connected" ? (
+              "Connected"
+            ) : (
+              "Connect"
+            )}
+          </button>
+        </div>
+        {!isOnline && (
+          <div className="mt-2 text-sm text-red-500 flex items-center">
+            <WifiOff className="h-4 w-4 mr-1" />
+            You are currently offline. Reconnection will be attempted when you're back online.
+          </div>
+        )}
+        {reconnectAttempts > 0 && connectionStatus !== "connected" && (
+          <div className="mt-2 text-sm text-yellow-500">
+            Connection lost. Reconnection attempt {reconnectAttempts}/5...
+          </div>
+        )}
+      </div>
+
+      {/* MESSAGES SECTION (Scrollable) */}
+      <div 
+        className="flex-1 overflow-y-auto bg-gray-100 dark:bg-gray-900 p-4 md:p-6"
+        ref={chatContainerRef}
+        onScroll={handleChatScroll}
+      >
+        <AnimatePresence>
+          {messages.length === 0 ? (
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              className="h-full flex items-center justify-center text-gray-500 dark:text-gray-400"
+            >
+              <p className="text-center">
+                No messages yet. Connect to a peer and start chatting!
+              </p>
+            </motion.div>
+          ) : (
+            messages.map((msg, idx) => (
+              <motion.div
+                key={idx}
+                initial={{ opacity: 0, y: 20, scale: 0.8 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.3 }}
+                className={`mb-4 flex ${msg.sender === "you" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`max-w-[80%] px-4 py-3 rounded-2xl ${
+                    msg.sender === "you"
+                      ? "bg-violet-500 text-white rounded-tr-none"
+                      : "bg-white dark:bg-gray-800 shadow-md rounded-tl-none"
+                  }`}
+                >
+                  <div className="text-sm">{msg.text}</div>
+                  {msg.file && (
+                    <div className="mt-2">{renderFilePreview(msg.file)}</div>
+                  )}
+                  <div
+                    className={`text-xs mt-1 text-right ${
+                      msg.sender === "you"
+                        ? "text-violet-200"
+                        : "text-gray-500"
+                    }`}
+                  >
+                    {msg.timestamp ? formatTime(msg.timestamp) : ""}
+                  </div>
+                </div>
+              </motion.div>
+            ))
+          )}
+        </AnimatePresence>
+
+        {/* If the user is scrolled up, show a floating “Scroll to Bottom” button */}
+        <AnimatePresence>
+          {!autoScroll && messages.length > 0 && (
+            <motion.button
+              initial={{ opacity: 0, x: 50 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 50 }}
+              onClick={() => {
+                chatContainerRef.current?.scrollTo({
+                  top: chatContainerRef.current.scrollHeight,
+                  behavior: "smooth",
+                })
+                setAutoScroll(true)
+              }}
+              className="flex items-center gap-1 px-3 py-2 rounded-full bg-violet-500 text-white fixed right-4 bottom-28 md:bottom-32 shadow-lg hover:bg-violet-600"
+            >
+              <ArrowDown className="h-4 w-4" />
+              Go to bottom
+            </motion.button>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* FILE PREVIEW BAR */}
+      <AnimatePresence>
+        {filePreview && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="p-4 border-t dark:border-gray-700 bg-white dark:bg-gray-800"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {getFileIcon(filePreview.type)}
+                <span className="text-sm truncate max-w-[200px]">
+                  {filePreview.name}
+                </span>
+              </div>
+              <button
+                onClick={cancelFileSelection}
+                className="text-red-500 hover:text-red-600 text-sm"
+              >
+                Cancel
               </button>
             </div>
-            <AnimatePresence>
-              {showEmojiPicker && (
-                <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} className="absolute bottom-full mb-2 left-0 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-2 shadow-lg z-20 max-h-40 overflow-y-auto">
-                  <div className="grid grid-cols-8 gap-2">
-                    {emojis.map((emoji, index) => (
-                      <button key={index} type="button" onClick={() => addEmoji(emoji)} className="text-xl hover:bg-gray-100 dark:hover:bg-gray-700 rounded p-1">
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </form>
-        </motion.div>
-        <motion.footer initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6, duration: 0.5 }} className="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">
-          LANtern Messenger - Secure P2P Communication
-        </motion.footer>
-      </div>
+            {filePreview.url && filePreview.type.startsWith("image/") && (
+              <div className="mt-2">
+                <img
+                  src={filePreview.url || "/placeholder.svg"}
+                  alt={filePreview.name}
+                  className="max-h-32 max-w-full object-contain rounded"
+                />
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* MESSAGE INPUT BAR */}
+      <form 
+        onSubmit={sendMessage} 
+        className="p-4 border-t dark:border-gray-700 bg-white dark:bg-gray-800"
+      >
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={connectionStatus !== "connected"}
+            className="p-3 rounded-xl bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Upload className="h-5 w-5 text-gray-700 dark:text-gray-300" />
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            disabled={connectionStatus !== "connected"}
+            className="p-3 rounded-xl bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            😀
+          </button>
+          <input
+            type="text"
+            placeholder="Type your message..."
+            value={messageInput}
+            onChange={handleTyping}
+            disabled={connectionStatus !== "connected"}
+            className="flex-1 p-3 border dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-400 transition-all disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={
+              connectionStatus !== "connected" || 
+              (!messageInput.trim() && !fileToSend)
+            }
+            className="bg-violet-500 hover:bg-violet-600 text-white p-3 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+          >
+            <Send className="h-5 w-5" />
+          </button>
+        </div>
+
+        <AnimatePresence>
+          {showEmojiPicker && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              className="absolute bottom-[72px] left-4 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-2 shadow-lg z-20 max-h-40 overflow-y-auto"
+            >
+              <div className="grid grid-cols-8 gap-2">
+                {emojis.map((emoji, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    onClick={() => addEmoji(emoji)}
+                    className="text-xl hover:bg-gray-100 dark:hover:bg-gray-700 rounded p-1"
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </form>
+
+      {/* FOOTER */}
+      <motion.footer
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.6, duration: 0.5 }}
+        className="text-center text-sm text-gray-500 dark:text-gray-400 p-2"
+      >
+        LANtern Messenger - Secure P2P Communication
+      </motion.footer>
     </div>
   )
 }
