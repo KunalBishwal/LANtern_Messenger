@@ -20,7 +20,6 @@ A secure peer-to-peer messaging application that works **offline** over local ne
 ## 🛠 Tech Stack
 
 - **PeerJS** (WebRTC for P2P communication)
-- **PEAR** (Hyperswarm,HyperBee,CoreStore)
 - **React** + **Vite** (Frontend framework)
 - **multicast-dns** (Local network peer discovery)
 - **Tailwind CSS** (Styling)
